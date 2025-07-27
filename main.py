@@ -197,5 +197,66 @@ def get_available_options(template_str_id, target_category_str_id):
     except psycopg2.Error as e:
         return jsonify({"error": "Database error", "detail": str(e)}), 500
 
+# --- Milestone 3: Validate Full Configuration and Get Price ---
+@app.route('/product-templates/<string:template_str_id>/validate-configuration', methods=['POST'])
+def validate_configuration(template_str_id):
+    """
+    Validates a complete set of selections against all compatibility rules
+    and calculates the total price if valid.
+    """
+    data = request.get_json()
+    if not data or 'selections' not in data:
+        return jsonify({"error": "Request must include 'selections'"}), 400
+
+    selections = data['selections']
+
+    try:
+        # 1. Fetch all necessary data
+        template = data_layer.find_template_details(template_str_id)
+        if not template:
+            return jsonify({"error": f"Product template '{template_str_id}' not found."}), 404
+
+        selected_choices = data_layer.find_choices_from_selection(template['template_id'], selections)
+
+        # Ensure all provided selections were valid and found in the DB
+        if len(selected_choices) != len(selections):
+            return jsonify({"error": "One or more selections are invalid for this product."}), 400
+
+        all_rules = data_layer.find_all_rules_for_template(template['template_id'])
+
+        # 2. Perform validation and price calculation
+        errors = set()
+        total_price = template['base_price']
+        selected_choice_uuids = {choice['choice_id'] for choice in selected_choices}
+
+        for choice in selected_choices:
+            total_price += choice['price_delta']
+
+        # 3. Check all rules against the set of selected choices
+        for rule in all_rules:
+            primary_selected = rule['primary_choice_id'] in selected_choice_uuids
+            secondary_selected = rule['secondary_choice_id'] in selected_choice_uuids
+
+            # Check for unmet requirements
+            if rule['rule_type'] == 'REQUIRES' and primary_selected and not secondary_selected:
+                errors.add(f"Selection '{rule['primary_choice_name']}' REQUIRES '{rule['secondary_choice_name']}'.")
+
+            # Check for incompatibilities
+            if rule['rule_type'] == 'INCOMPATIBLE_WITH' and primary_selected and secondary_selected:
+                errors.add(f"Selection '{rule['primary_choice_name']}' is INCOMPATIBLE WITH '{rule['secondary_choice_name']}'.")
+
+        # 4. Format and return the response
+        if errors:
+            return jsonify({"is_valid": False, "errors": sorted(list(errors))})
+        else:
+            return jsonify({
+                "is_valid": True,
+                "total_price": float(total_price),
+                "selections": selections
+            })
+
+    except psycopg2.Error as e:
+        return jsonify({"error": "Database error", "detail": str(e)}), 500
+
 if __name__ == '__main__':
     app.run(debug=True)

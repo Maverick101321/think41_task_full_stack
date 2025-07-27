@@ -114,3 +114,50 @@ def find_required_choices(selected_uuids):
         WHERE cr.rule_type = 'REQUIRES' AND cr.primary_choice_id = ANY(%s);
     """
     return execute_query(sql, (selected_uuids,), fetch="all")
+
+
+def find_template_details(template_str_id):
+    """Finds a template's base price and UUID by its string ID."""
+    sql = "SELECT template_id, base_price FROM ProductTemplate WHERE str_id = %s;"
+    return execute_query(sql, (template_str_id,), fetch="one")
+
+
+def find_choices_from_selection(template_id, selections):
+    """
+    Finds all choice details for a given set of selections.
+    Selections is a dict of {category_str_id: choice_str_id}.
+    """
+    if not selections:
+        return []
+    # Create a list of tuples for the WHERE IN clause
+    selection_pairs = tuple(selections.items())
+    sql = """
+        SELECT
+            oc.choice_id, oc.str_id, oc.name, oc.price_delta,
+            ocat.category_id, ocat.str_id as category_str_id, ocat.name as category_name
+        FROM OptionChoice oc
+        JOIN OptionCategory ocat ON oc.category_id = ocat.category_id
+        WHERE ocat.template_id = %s AND (ocat.str_id, oc.str_id) IN %s;
+    """
+    return execute_query(sql, (template_id, selection_pairs), fetch="all")
+
+
+def find_all_rules_for_template(template_id):
+    """
+    Finds all compatibility rules for a given template, joining choice names for
+    human-readable error messages.
+    """
+    sql = """
+        SELECT
+            r.rule_type,
+            p.choice_id as primary_choice_id,
+            p.name as primary_choice_name,
+            s.choice_id as secondary_choice_id,
+            s.name as secondary_choice_name
+        FROM CompatibilityRule r
+        JOIN OptionChoice p ON r.primary_choice_id = p.choice_id
+        JOIN OptionChoice s ON r.secondary_choice_id = s.choice_id
+        JOIN OptionCategory pcat ON p.category_id = pcat.category_id
+        WHERE pcat.template_id = %s;
+    """
+    return execute_query(sql, (template_id,), fetch="all")
